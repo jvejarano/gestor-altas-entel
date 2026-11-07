@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gestor de Altas</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Gestor de Altas</h1>
+  <div id="stats" class="muted"></div>
+  <button id="btnImport" class="primary">Subir planilla</button>
+</header>
+
+<main>
+  <section class="filters">
+    <input id="q" type="search" placeholder="Buscar nombre, cuenta, teléfono o email…" autofocus>
+    <label>Instalación desde <input id="desde" type="date"></label>
+    <label>hasta <input id="hasta" type="date"></label>
+    <label>Hoja <select id="hoja"><option value="">Todas</option></select></label>
+    <label>Periodo <select id="periodo"><option value="">Todos</option></select></label>
+    <label>Cobro
+      <select id="pago">
+        <option value="">Cualquiera</option>
+        <option value="con">Con cobro</option>
+        <option value="sin">Sin cobro</option>
+      </select>
+    </label>
+    <label>Monto ≥ <input id="monto_min" type="number" step="any" style="width:80px"></label>
+    <label>≤ <input id="monto_max" type="number" step="any" style="width:80px"></label>
+    <label class="chk"><input id="sin_contacto" type="checkbox"> Sin contacto</label>
+    <button id="btnClear">Limpiar</button>
+    <button id="btnCsv">Exportar CSV</button>
+  </section>
+
+  <div id="info" class="muted"></div>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="cuenta">Cuenta</th>
+          <th data-sort="fecha">Instalación</th>
+          <th data-sort="nombre">Nombre</th>
+          <th>Contacto</th>
+          <th data-sort="hoja">Hoja</th>
+          <th>Cobros</th>
+          <th data-sort="total" class="num">Total</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <nav class="pager">
+    <button id="prev">‹ Anterior</button>
+    <span id="pageInfo"></span>
+    <button id="next">Siguiente ›</button>
+  </nav>
+</main>
+
+<dialog id="dlg">
+  <h2>Subir planilla de ventas</h2>
+  <p class="muted">Archivos .xlsx. Se procesa en tu navegador y se hace upsert por número de cuenta (re-subir no duplica).</p>
+  <input id="file" type="file" accept=".xlsx,.xls" multiple>
+  <pre id="preview"></pre>
+  <progress id="prog" value="0" max="1" hidden></progress>
+  <div class="actions">
+    <button id="btnCancel">Cerrar</button>
+    <button id="btnGo" class="primary" disabled>Importar</button>
+  </div>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
