@@ -10,10 +10,87 @@
 <header>
   <h1>Gestor de Altas</h1>
   <div id="stats" class="muted"></div>
+  <nav class="tabs">
+    <button id="tabAltas" class="tab active">Altas</button>
+    <button id="tabGen" class="tab">Genesis</button>
+    <button id="tabComp" class="tab">Comparar con Genesis</button>
+  </nav>
   <button id="btnImport" class="primary">Subir planilla</button>
 </header>
 
-<main>
+<main id="viewGen" hidden>
+  <section class="filters">
+    <input id="gq" type="search" placeholder="Buscar nombre, cuenta, carnet, solicitud, reserva o dirección…">
+    <label>Alta desde <input id="gdesde" type="date"></label>
+    <label>hasta <input id="ghasta" type="date"></label>
+    <label>Plan <select id="gplan"><option value="">Todos</option></select></label>
+    <label>En planilla
+      <select id="gplanilla">
+        <option value="">Cualquiera</option>
+        <option value="con">Sí figura</option>
+        <option value="sin">No figura</option>
+      </select>
+    </label>
+    <button id="gClear">Limpiar</button>
+    <button id="gCsv">Exportar CSV</button>
+    <button id="btnGenesis2" class="primary">Subir Genesis (.mht)</button>
+  </section>
+  <div id="gInfo" class="muted"></div>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-gsort="cuenta">Cuenta</th>
+          <th data-gsort="fecha">Fecha alta</th>
+          <th data-gsort="nombre">Nombre</th>
+          <th data-gsort="carnet">Carnet</th>
+          <th>Solicitud</th><th>Reserva</th>
+          <th data-gsort="plan">Plan</th>
+          <th>Dirección</th>
+          <th>Planilla</th>
+        </tr>
+      </thead>
+      <tbody id="gRows"></tbody>
+    </table>
+  </div>
+  <nav class="pager">
+    <button id="gPrev">‹ Anterior</button>
+    <span id="gPageInfo"></span>
+    <button id="gNext">Siguiente ›</button>
+  </nav>
+</main>
+
+<main id="viewComp" hidden>
+  <p class="muted">Compara las instalaciones de la planilla (ventas de asesores) con las altas realizadas en Genesis. Se cruza por número de cuenta; si no coincide, se busca el mismo nombre en cualquier orden.</p>
+  <section class="filters">
+    <button id="btnGenesis" class="primary">Subir Genesis (.mht)</button>
+    <input id="cq" type="search" placeholder="Buscar cuenta, nombre o carnet…">
+    <label>Desde <input id="cdesde" type="date"></label>
+    <label>hasta <input id="chasta" type="date"></label>
+    <button id="cClear">Limpiar</button>
+    <button id="cCsv">Exportar CSV</button>
+  </section>
+  <div id="cRangos" class="small"></div>
+  <div id="cChips" class="chips"></div>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Estado</th><th>Cuenta</th><th>Fecha planilla</th><th>Fecha Genesis</th>
+          <th>Nombre planilla</th><th>Nombre Genesis</th><th>Carnet</th><th>Plan</th><th>Nota</th>
+        </tr>
+      </thead>
+      <tbody id="cRows"></tbody>
+    </table>
+  </div>
+  <nav class="pager">
+    <button id="cPrev">‹ Anterior</button>
+    <span id="cPageInfo"></span>
+    <button id="cNext">Siguiente ›</button>
+  </nav>
+</main>
+
+<main id="viewAltas">
   <section class="filters">
     <input id="q" type="search" placeholder="Buscar nombre, cuenta, teléfono o email…" autofocus>
     <label>Instalación desde <input id="desde" type="date"></label>
@@ -67,6 +144,17 @@
   <div class="actions">
     <button id="btnCancel">Cerrar</button>
     <button id="btnGo" class="primary" disabled>Importar</button>
+  </div>
+</dialog>
+
+<dialog id="gdlg">
+  <h2>Subir Genesis (.mht)</h2>
+  <p class="muted">Guarda la página «Altas realizadas» de Genesis como .mht (Ctrl+S → "Página web, un solo archivo") y súbela aquí. Re-subir actualiza por cuenta.</p>
+  <input id="gfile" type="file" accept=".mht,.mhtml">
+  <pre id="gpreview"></pre>
+  <div class="actions">
+    <button id="gCancel">Cerrar</button>
+    <button id="gGo" class="primary" disabled>Importar</button>
   </div>
 </dialog>
 

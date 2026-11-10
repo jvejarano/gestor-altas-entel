@@ -1,4 +1,5 @@
 import { parseWorkbook } from "./parser.js";
+import { parseGenesisMht } from "./genesis.js";
 
 const $ = (id) => document.getElementById(id);
 const FILTERS = ["q", "desde", "hasta", "hoja", "periodo", "pago", "monto_min", "monto_max"];
@@ -109,6 +110,167 @@ $("btnGo").onclick = async () => {
     $("preview").textContent += "\n✔ Importación completa";
     await loadStats(); reload();
   } catch (err) { $("preview").textContent += "\n✖ " + err.message; }
+};
+
+// ---- Comparar con Genesis ----
+const ESTADOS = {
+  "": "Todos", solo_genesis: "Solo en Genesis", solo_planilla: "Solo en planilla",
+  posible: "Posible coincidencia", difiere: "Difiere", coincide: "Coinciden", fuera_rango: "Fuera de rango",
+};
+const cs = { page: 1, size: 100, estado: "solo_genesis", loaded: false };
+
+const gs = { page: 1, size: 50, sort: "fecha", dir: "desc", loaded: false };
+
+function setTab(tab) {
+  for (const [name, view, btn] of [["altas", "viewAltas", "tabAltas"], ["gen", "viewGen", "tabGen"], ["comp", "viewComp", "tabComp"]]) {
+    $(view).hidden = name !== tab;
+    $(btn).classList.toggle("active", name === tab);
+  }
+  $("btnImport").hidden = tab !== "altas";
+  if (tab === "comp" && !cs.loaded) loadComp().catch(alert);
+  if (tab === "gen" && !gs.loaded) loadGen().catch(alert);
+}
+$("tabAltas").onclick = () => setTab("altas");
+$("tabGen").onclick = () => setTab("gen");
+$("tabComp").onclick = () => setTab("comp");
+
+// ---- Búsqueda en Genesis ----
+const GF = ["gq", "gdesde", "ghasta", "gplan", "gplanilla"];
+const gParams = (extra = {}) => {
+  const p = new URLSearchParams();
+  const map = { gq: "q", gdesde: "desde", ghasta: "hasta", gplan: "plan", gplanilla: "planilla" };
+  for (const k of GF) if ($(k).value) p.set(map[k], $(k).value);
+  p.set("sort", gs.sort); p.set("dir", gs.dir);
+  for (const [k, v] of Object.entries(extra)) p.set(k, v);
+  return p;
+};
+
+async function loadGenPlanes() {
+  const s = await api("/api/genesis/stats");
+  const cur = $("gplan").value;
+  $("gplan").length = 1;
+  for (const p of s.planes) $("gplan").add(new Option(`${p.plan} (${p.n})`, p.plan));
+  $("gplan").value = cur;
+  return s;
+}
+
+async function loadGen() {
+  const [d, s] = await Promise.all([api("/api/genesis?" + gParams({ page: gs.page, size: gs.size })), loadGenPlanes()]);
+  gs.loaded = true;
+  const pages = Math.max(1, Math.ceil(d.total / gs.size));
+  $("gInfo").textContent = s.n
+    ? `${d.total} resultado(s) de ${s.n} · periodo ${s.min} → ${s.max}`
+    : "Aún no hay datos de Genesis. Sube el archivo .mht.";
+  $("gPageInfo").textContent = `Página ${gs.page} de ${pages}`;
+  $("gPrev").disabled = gs.page <= 1; $("gNext").disabled = gs.page >= pages;
+  $("gRows").innerHTML = d.rows.map((r) => `
+    <tr>
+      <td>${esc(r.cuenta)}</td>
+      <td>${esc(r.fecha_alta)}</td>
+      <td>${esc(r.nombre)}</td>
+      <td>${esc(r.carnet)}</td>
+      <td>${esc(r.solicitud)}</td>
+      <td>${esc(r.reserva)}</td>
+      <td>${esc(r.plan)}</td>
+      <td class="small">${esc(r.direccion)}</td>
+      <td>${r.en_planilla ? `<span class="st st-coincide">Sí${r.hoja_planilla ? " · " + esc(r.hoja_planilla) : ""}</span>` : '<span class="st st-solo_genesis">No</span>'}</td>
+    </tr>`).join("") || '<tr><td colspan="9" class="muted">Sin resultados</td></tr>';
+  document.querySelectorAll("th[data-gsort]").forEach((th) => {
+    th.classList.toggle("asc", th.dataset.gsort === gs.sort && gs.dir === "asc");
+    th.classList.toggle("desc", th.dataset.gsort === gs.sort && gs.dir === "desc");
+  });
+}
+let gt;
+const gReload = () => { gs.page = 1; loadGen().catch(alert); };
+for (const k of GF) $(k).addEventListener("input", () => { clearTimeout(gt); gt = setTimeout(gReload, k === "gq" ? 250 : 0); });
+$("gClear").onclick = () => { GF.forEach((k) => ($(k).value = "")); gReload(); };
+$("gPrev").onclick = () => { gs.page--; loadGen(); };
+$("gNext").onclick = () => { gs.page++; loadGen(); };
+document.querySelectorAll("th[data-gsort]").forEach((th) => (th.onclick = () => {
+  gs.dir = gs.sort === th.dataset.gsort && gs.dir === "desc" ? "asc" : "desc";
+  gs.sort = th.dataset.gsort; gs.page = 1; loadGen();
+}));
+$("gCsv").onclick = async () => {
+  const d = await api("/api/genesis?" + gParams({ all: 1 }));
+  const head = ["cuenta", "fecha_alta", "nombre", "carnet", "solicitud", "reserva", "plan", "direccion", "en_planilla", "hoja_planilla"];
+  const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [head.join(",")].concat(d.rows.map((r) => head.map((h) => cell(r[h])).join(","))).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv" }));
+  a.download = "genesis.csv"; a.click();
+};
+
+const cParams = (extra = {}) => {
+  const p = new URLSearchParams();
+  if (cs.estado) p.set("estado", cs.estado);
+  if ($("cq").value) p.set("q", $("cq").value);
+  if ($("cdesde").value) p.set("desde", $("cdesde").value);
+  if ($("chasta").value) p.set("hasta", $("chasta").value);
+  for (const [k, v] of Object.entries(extra)) p.set(k, v);
+  return p;
+};
+
+async function loadComp() {
+  const d = await api("/api/comparar?" + cParams({ page: cs.page, size: cs.size }));
+  cs.loaded = true;
+  const rg = (r) => (r ? `${r.min} → ${r.max}` : "sin datos");
+  $("cRangos").textContent = `Periodo planilla: ${rg(d.rangoPlanilla)} · Periodo Genesis: ${rg(d.rangoGenesis)}`;
+  const total = Object.values(d.resumen).reduce((a, b) => a + b, 0);
+  $("cChips").innerHTML = Object.entries(ESTADOS).map(([k, v]) =>
+    `<button data-e="${k}" class="${cs.estado === k ? "on" : ""}">${v} (${k ? d.resumen[k] || 0 : total})</button>`).join("");
+  $("cChips").querySelectorAll("button").forEach((b) => (b.onclick = () => { cs.estado = b.dataset.e; cs.page = 1; loadComp(); }));
+  const pages = Math.max(1, Math.ceil(d.total / cs.size));
+  $("cPageInfo").textContent = `${d.total} fila(s) · Página ${cs.page} de ${pages}`;
+  $("cPrev").disabled = cs.page <= 1; $("cNext").disabled = cs.page >= pages;
+  $("cRows").innerHTML = d.rows.map((r) => `
+    <tr>
+      <td><span class="st st-${r.estado}">${ESTADOS[r.estado]}</span></td>
+      <td>${esc(r.cuenta)}${r.cuenta_genesis && r.cuenta_genesis !== r.cuenta ? `<div class="small">Genesis: ${esc(r.cuenta_genesis)}</div>` : ""}</td>
+      <td>${esc(r.fecha_planilla)}${r.hoja ? `<div class="small">${esc(r.hoja)}</div>` : ""}</td>
+      <td>${esc(r.fecha_genesis)}</td>
+      <td>${esc(r.nombre_planilla)}</td>
+      <td>${esc(r.nombre_genesis)}</td>
+      <td>${esc(r.carnet)}</td>
+      <td>${esc(r.plan)}</td>
+      <td class="small">${esc(r.nota)}</td>
+    </tr>`).join("") || '<tr><td colspan="9" class="muted">Sin resultados. ¿Subiste el archivo de Genesis?</td></tr>';
+}
+let ct;
+for (const k of ["cq", "cdesde", "chasta"]) $(k).addEventListener("input", () => { clearTimeout(ct); ct = setTimeout(() => { cs.page = 1; loadComp().catch(alert); }, 250); });
+$("cClear").onclick = () => { ["cq", "cdesde", "chasta"].forEach((k) => ($(k).value = "")); cs.page = 1; loadComp(); };
+$("cPrev").onclick = () => { cs.page--; loadComp(); };
+$("cNext").onclick = () => { cs.page++; loadComp(); };
+$("cCsv").onclick = async () => {
+  const d = await api("/api/comparar?" + cParams({ all: 1 }));
+  const head = ["estado", "cuenta", "cuenta_genesis", "fecha_planilla", "fecha_genesis", "nombre_planilla", "nombre_genesis", "hoja", "carnet", "plan", "direccion", "nota"];
+  const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [head.join(",")].concat(d.rows.map((r) => head.map((h) => cell(r[h])).join(","))).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv" }));
+  a.download = "comparacion.csv"; a.click();
+};
+
+let gPending = [];
+$("btnGenesis").onclick = $("btnGenesis2").onclick = () => { gPending = []; $("gpreview").textContent = ""; $("gfile").value = ""; $("gGo").disabled = true; $("gdlg").showModal(); };
+$("gCancel").onclick = () => $("gdlg").close();
+$("gfile").onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    gPending = parseGenesisMht(await f.arrayBuffer(), f.name);
+    const fechas = gPending.map((r) => r.fecha).filter(Boolean).sort();
+    $("gpreview").textContent = `${f.name}\n${gPending.length} altas · ${fechas[0]} → ${fechas.at(-1)}`;
+    $("gGo").disabled = !gPending.length;
+  } catch (err) { gPending = []; $("gpreview").textContent = "✖ " + err.message; $("gGo").disabled = true; }
+};
+$("gGo").onclick = async () => {
+  $("gGo").disabled = true;
+  try {
+    for (let i = 0; i < gPending.length; i += 40)
+      await api("/api/genesis/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rows: gPending.slice(i, i + 40) }) });
+    $("gpreview").textContent += "\n✔ Importación completa";
+    cs.page = 1; gs.page = 1;
+    await Promise.all([loadComp(), loadGen()]);
+  } catch (err) { $("gpreview").textContent += "\n✖ " + err.message; }
 };
 
 loadStats().then(load).catch((e) => ($("info").textContent = "Error: " + e.message));

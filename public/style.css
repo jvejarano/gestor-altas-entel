@@ -29,6 +29,25 @@ th.asc::after { content: " ▲"; } th.desc::after { content: " ▼"; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .chip { display: inline-block; background: var(--chip); border-radius: 10px; padding: 1px 8px; margin: 1px 3px 1px 0; font-size: 12px; white-space: nowrap; }
 .small { font-size: 12px; color: var(--muted); }
+[hidden] { display: none !important; }
+.tabs { display: flex; gap: 4px; }
+.tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; }
+.tab.active { border-bottom-color: var(--accent); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.chips button { border-radius: 16px; }
+.chips button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.st { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; font-weight: 600; }
+.st-coincide { background: #d9f2e1; color: #145a2c; }
+.st-difiere, .st-posible { background: #fff0c7; color: #6b4a00; }
+.st-solo_genesis, .st-solo_planilla { background: #fbd9d9; color: #7a1818; }
+.st-fuera_rango { background: #e6e8ec; color: #4a5361; }
+@media (prefers-color-scheme: dark) {
+  .st-coincide { background: #17402a; color: #9be3b4; }
+  .st-difiere, .st-posible { background: #4a3a10; color: #f4d58a; }
+  .st-solo_genesis, .st-solo_planilla { background: #4d1f1f; color: #f5aaaa; }
+  .st-fuera_rango { background: #2c323c; color: #aab3c2; }
+}
+#gpreview { max-height: 160px; overflow: auto; background: var(--bg); padding: 8px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; }
 .pager { display: flex; gap: 12px; justify-content: center; align-items: center; margin-top: 12px; }
 dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); width: min(560px, 92vw); }
 dialog::backdrop { background: rgba(0,0,0,.45); }

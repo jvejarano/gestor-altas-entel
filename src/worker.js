@@ -127,6 +127,173 @@ async function importAltas(env, req) {
   return json({ ok: true, procesadas: rows.length });
 }
 
+async function importGenesis(env, req) {
+  const { rows } = await req.json();
+  if (!Array.isArray(rows) || rows.length > 200) return json({ error: "rows invalido (max 200)" }, 400);
+  const stmts = [];
+  for (const r of rows) {
+    const cuenta = String(r.cuenta ?? "").trim();
+    const nombre = String(r.nombre ?? "").trim();
+    if (!cuenta || !nombre) continue;
+    stmts.push(
+      env.DB.prepare(
+        `INSERT INTO genesis (cuenta, fecha_alta, carnet, nombre, nombre_norm, solicitud, reserva, plan, direccion, archivo)
+         VALUES (?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(cuenta) DO UPDATE SET
+           fecha_alta=excluded.fecha_alta, carnet=excluded.carnet, nombre=excluded.nombre,
+           nombre_norm=excluded.nombre_norm, solicitud=excluded.solicitud, reserva=excluded.reserva,
+           plan=excluded.plan, direccion=excluded.direccion, archivo=excluded.archivo,
+           updated_at=datetime('now')`
+      ).bind(cuenta, r.fecha || null, r.carnet || null, nombre, norm(nombre), r.solicitud || null,
+        r.reserva || null, r.plan || null, r.direccion || null, r.archivo || null)
+    );
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  return json({ ok: true, procesadas: rows.length });
+}
+
+const G_SORTS = { fecha: "g.fecha_alta", nombre: "g.nombre_norm", cuenta: "g.cuenta", carnet: "g.carnet", plan: "g.plan" };
+
+async function listGenesis(env, url) {
+  const p = url.searchParams;
+  const w = [], args = [];
+  const q = p.get("q")?.trim();
+  if (q) {
+    for (const t of norm(q).split(/\s+/).filter(Boolean)) {
+      w.push(
+        "(g.nombre_norm LIKE ? OR g.cuenta LIKE ? OR IFNULL(g.carnet,'') LIKE ? OR IFNULL(g.solicitud,'') LIKE ? OR IFNULL(g.reserva,'') LIKE ? OR UPPER(IFNULL(g.direccion,'')) LIKE ?)"
+      );
+      const like = `%${t}%`;
+      args.push(like, like, like, like, like, like);
+    }
+  }
+  if (p.get("desde")) { w.push("g.fecha_alta >= ?"); args.push(p.get("desde")); }
+  if (p.get("hasta")) { w.push("g.fecha_alta <= ?"); args.push(p.get("hasta")); }
+  if (p.get("plan")) { w.push("g.plan = ?"); args.push(p.get("plan")); }
+  const pl = p.get("planilla"); // con | sin
+  if (pl === "con") w.push("EXISTS (SELECT 1 FROM altas a WHERE a.cuenta=g.cuenta)");
+  if (pl === "sin") w.push("NOT EXISTS (SELECT 1 FROM altas a WHERE a.cuenta=g.cuenta)");
+  const where = w.length ? "WHERE " + w.join(" AND ") : "";
+  const page = Math.max(1, +p.get("page") || 1);
+  const size = Math.min(500, Math.max(1, +p.get("size") || 50));
+  const sort = G_SORTS[p.get("sort")] || G_SORTS.fecha;
+  const dir = p.get("dir") === "asc" ? "ASC" : "DESC";
+  const total = await env.DB.prepare(`SELECT COUNT(*) n FROM genesis g ${where}`).bind(...args).first("n");
+  const lim = p.get("all") === "1" ? "" : "LIMIT ? OFFSET ?";
+  const { results } = await env.DB.prepare(
+    `SELECT g.*, (SELECT a.hoja FROM altas a WHERE a.cuenta=g.cuenta) AS hoja_planilla,
+       EXISTS (SELECT 1 FROM altas a WHERE a.cuenta=g.cuenta) AS en_planilla
+     FROM genesis g ${where} ORDER BY ${sort} ${dir}, g.cuenta ${lim}`
+  ).bind(...args, ...(lim ? [size, (page - 1) * size] : [])).all();
+  return json({ total, page, size, rows: results });
+}
+
+async function genesisStats(env) {
+  const [t, planes] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) n, MIN(fecha_alta) min, MAX(fecha_alta) max FROM genesis`).first(),
+    env.DB.prepare(`SELECT plan, COUNT(*) n FROM genesis WHERE plan IS NOT NULL GROUP BY plan ORDER BY n DESC`).all(),
+  ]);
+  return json({ ...t, planes: planes.results });
+}
+
+// Clave de nombre independiente del orden de las palabras y de espacios dobles
+const nameKey = (n) => norm(n).split(/\s+/).filter(Boolean).sort().join(" ");
+
+/**
+ * Compara planilla (altas) contra Genesis.
+ * Estados: coincide | difiere | posible | solo_genesis | solo_planilla | fuera_rango
+ *  - difiere: misma cuenta pero distinta fecha o nombre
+ *  - posible: cuentas distintas pero mismo nombre (palabras en cualquier orden)
+ *  - fuera_rango: solo existe en una fuente y su fecha cae fuera del periodo que cubre la otra
+ */
+async function comparar(env, url) {
+  const p = url.searchParams;
+  const [A, G] = await Promise.all([
+    env.DB.prepare(`SELECT cuenta, fecha_instalacion f, nombre, hoja FROM altas`).all(),
+    env.DB.prepare(`SELECT cuenta, fecha_alta f, nombre, carnet, plan, direccion FROM genesis`).all(),
+  ]);
+  const altas = A.results, gen = G.results;
+  const range = (xs) => {
+    const f = xs.map((x) => x.f).filter(Boolean).sort();
+    return f.length ? { min: f[0], max: f.at(-1) } : null;
+  };
+  const rangoPlanilla = range(altas), rangoGenesis = range(gen);
+  const inRange = (f, r) => !!(r && f && f >= r.min && f <= r.max);
+
+  const gMap = new Map(gen.map((g) => [g.cuenta, g]));
+  const aMap = new Map(altas.map((a) => [a.cuenta, a]));
+  const out = [];
+  const row = (estado, a, g, nota) => ({
+    estado, nota: nota || null,
+    cuenta: (a || g).cuenta, cuenta_genesis: g?.cuenta ?? null,
+    fecha_planilla: a?.f ?? null, fecha_genesis: g?.f ?? null,
+    nombre_planilla: a?.nombre ?? null, nombre_genesis: g?.nombre ?? null,
+    hoja: a?.hoja ?? null, carnet: g?.carnet ?? null, plan: g?.plan ?? null, direccion: g?.direccion ?? null,
+  });
+
+  const soloA = [], soloG = [];
+  for (const a of altas) {
+    const g = gMap.get(a.cuenta);
+    if (!g) { soloA.push(a); continue; }
+    const notas = [];
+    if (a.f && g.f && a.f !== g.f) notas.push(`fecha ${a.f} vs ${g.f}`);
+    if (nameKey(a.nombre) !== nameKey(g.nombre)) notas.push("nombre distinto");
+    out.push(row(notas.length ? "difiere" : "coincide", a, g, notas.join("; ")));
+  }
+  for (const g of gen) if (!aMap.has(g.cuenta)) soloG.push(g);
+
+  // posibles: mismo nombre, distinta cuenta
+  const byName = new Map();
+  for (const g of soloG) { const k = nameKey(g.nombre); (byName.get(k) || byName.set(k, []).get(k)).push(g); }
+  const usadosG = new Set();
+  for (const a of soloA.slice()) {
+    const cand = (byName.get(nameKey(a.nombre)) || []).find((g) => !usadosG.has(g.cuenta));
+    if (cand) {
+      usadosG.add(cand.cuenta);
+      soloA.splice(soloA.indexOf(a), 1);
+      out.push(row("posible", a, cand, "mismo nombre, cuenta distinta"));
+    }
+  }
+  for (const a of soloA)
+    out.push(row(inRange(a.f, rangoGenesis) ? "solo_planilla" : "fuera_rango", a, null,
+      inRange(a.f, rangoGenesis) ? "no figura en Genesis" : "fecha fuera del periodo del Genesis cargado"));
+  for (const g of soloG) {
+    if (usadosG.has(g.cuenta)) continue;
+    out.push(row(inRange(g.f, rangoPlanilla) ? "solo_genesis" : "fuera_rango", null, g,
+      inRange(g.f, rangoPlanilla) ? "no figura en la planilla" : "fecha fuera del periodo de la planilla"));
+  }
+
+  const resumen = {};
+  for (const r of out) resumen[r.estado] = (resumen[r.estado] || 0) + 1;
+
+  // filtros
+  const estado = p.get("estado");
+  const q = norm(p.get("q") || "");
+  const desde = p.get("desde"), hasta = p.get("hasta");
+  let res = out.filter((r) => {
+    if (estado && r.estado !== estado) return false;
+    const f = r.fecha_genesis || r.fecha_planilla;
+    if (desde && (!f || f < desde)) return false;
+    if (hasta && (!f || f > hasta)) return false;
+    if (q) {
+      const hay = norm([r.cuenta, r.cuenta_genesis, r.nombre_planilla, r.nombre_genesis, r.carnet].join(" "));
+      if (!q.split(/\s+/).every((t) => hay.includes(t))) return false;
+    }
+    return true;
+  });
+  const order = { solo_genesis: 0, solo_planilla: 1, posible: 2, difiere: 3, coincide: 4, fuera_rango: 5 };
+  res.sort((x, y) => order[x.estado] - order[y.estado] ||
+    String(y.fecha_genesis || y.fecha_planilla).localeCompare(String(x.fecha_genesis || x.fecha_planilla)));
+
+  const all = p.get("all") === "1";
+  const page = Math.max(1, +p.get("page") || 1);
+  const size = Math.min(500, Math.max(1, +p.get("size") || 100));
+  return json({
+    resumen, rangoPlanilla, rangoGenesis, total: res.length, page, size,
+    rows: all ? res : res.slice((page - 1) * size, page * size),
+  });
+}
+
 async function stats(env) {
   const [tot, hojas, periodos] = await Promise.all([
     env.DB.prepare(`SELECT COUNT(*) altas, (SELECT IFNULL(SUM(monto),0) FROM pagos) monto FROM altas`).first(),
@@ -143,6 +310,10 @@ export default {
       if (url.pathname === "/api/altas" && req.method === "GET") return await listAltas(env, url);
       if (url.pathname === "/api/import" && req.method === "POST") return await importAltas(env, req);
       if (url.pathname === "/api/stats" && req.method === "GET") return await stats(env);
+      if (url.pathname === "/api/genesis/import" && req.method === "POST") return await importGenesis(env, req);
+      if (url.pathname === "/api/genesis" && req.method === "GET") return await listGenesis(env, url);
+      if (url.pathname === "/api/genesis/stats" && req.method === "GET") return await genesisStats(env);
+      if (url.pathname === "/api/comparar" && req.method === "GET") return await comparar(env, url);
       if (url.pathname.startsWith("/api/")) return json({ error: "no encontrado" }, 404);
     } catch (e) {
       return json({ error: String(e.message || e) }, 500);
